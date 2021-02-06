@@ -1,0 +1,25 @@
+version: "3.1"
+
+services:
+  monitor:
+    image: registry.cn-hongkong.aliyuncs.com/jfeklwjf/monitor
+#    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+#    ports:
+#      - "2112:2112"
+    restart: always
+    command: -port 123 -port 123 -ip 1.1.1.1
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+#    ports:
+#      - 9090:9090
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - monitor
