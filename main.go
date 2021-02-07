@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"github.com/Scalingo/go-netstat"
 	"github.com/go-co-op/gocron"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -11,18 +12,20 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
-type portsFlag []string
+type multiFlag []string
 
-func (i *portsFlag) String() string {
-	return "ports..."
+func (i *multiFlag) String() string {
+	return "flags..."
 }
 
-var ports portsFlag
+var localIPList multiFlag
+var etherList multiFlag
 
-func (i *portsFlag) Set(value string) error {
+func (i *multiFlag) Set(value string) error {
 	*i = append(*i, value)
 	return nil
 }
@@ -39,12 +42,22 @@ var (
 		Name: "monitor_forward_ip_total",
 		Help: "Monitor",
 	}, []string{"port"})
+
+	// traffic
+	traffic = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "monitor_traffic_total",
+		Help: "Monitor",
+	}, []string{"ether"})
 )
 
-var needRecordPort []uint16
-var localIP string
+//var needRecordPort []uint16
+//var localIP string
+//var etherName string
+var trafficBytes map[string]uint64
 
 func init() {
+	trafficBytes = make(map[string]uint64)
+
 	// qqwry
 	var datPath = "qqwry.dat"
 	qqwry.DatData.FilePath = datPath
@@ -55,29 +68,47 @@ func init() {
 		}
 	}
 
-	flag.Var(&ports, "port", "the monitoring port.")
-	flag.StringVar(&localIP, "ip", "", "local IP Address.")
+	flag.Var(&localIPList, "ipPort", "the monitoring port.")
+	//flag.StringVar(&localIP, "ip", "", "local IP Address.")
+	flag.Var(&etherList, "ether", "Ether Name.")
 }
 
 func job() {
 	c, err := conntrack.Dial(nil)
+
+	if err != nil {
+		log.Println("conntrack error!")
+		return
+	}
 
 	df, err := c.DumpFilter(conntrack.Filter{})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	for _, port := range needRecordPort {
+	for _, ipPort := range localIPList {
 		freq := make(map[string]int)
+		port := 0
 
 		// 过滤包, 只要国内到机器的包
 		for _, f := range df {
-			if f.TupleOrig.Proto.DestinationPort == port && f.TupleOrig.IP.DestinationAddress.String() == localIP {
+			ipPortSplit := strings.Split(ipPort, ":")
+			if len(ipPortSplit) != 2 {
+				log.Println("ip port split error!")
+				return
+			}
+			ip := ipPortSplit[0]
+			port, _ = strconv.Atoi(ipPortSplit[1])
+			if port == 0 {
+				log.Println("port strcov.Atoi error!")
+				return
+			}
+			if f.TupleOrig.Proto.DestinationPort == uint16(port) && f.TupleOrig.IP.DestinationAddress.String() == ip {
 				freq[f.TupleOrig.IP.SourceAddress.String()]++
 			}
 		}
 
-		serverForwardIP.WithLabelValues(strconv.Itoa(int(port))).Add(float64(len(freq)))
+		serverForwardIP.WithLabelValues(strconv.Itoa(port)).Add(float64(len(freq)))
 
 		for ip, connSum := range freq {
 			res := qqwry.NewQQwry().SearchByIPv4(ip)
@@ -87,35 +118,76 @@ func job() {
 			} else {
 				country = "无"
 			}
-			serverForwardConnections.WithLabelValues(strconv.Itoa(int(port)), ip, country).Add(float64(connSum))
+			serverForwardConnections.WithLabelValues(strconv.Itoa(port), ip, country).Add(float64(connSum))
 		}
 	}
+
+	// stats traffic
+	for _, etherName := range etherList {
+		last := trafficBytes[etherName]
+		now := getEtherTransmitBytes(etherName)
+		if now < last {
+			log.Println("ether traffic stat error!")
+		} else {
+			increase := now - last
+			trafficBytes[etherName] = now
+			traffic.WithLabelValues(etherName).Add(float64(increase))
+		}
+	}
+}
+
+func getEtherTransmitBytes(etherName string) uint64 {
+	var flow uint64
+	stat, _ := netstat.Stats()
+	for _, ether := range stat {
+		if ether.Interface == etherName {
+			flow = ether.Transmit.Bytes
+		}
+	}
+	return flow
 }
 
 func main() {
 	flag.Parse()
 
-	for _, port := range ports {
-		v, err := strconv.Atoi(port)
-		if err != nil {
-			panic("port error!")
-		}
-		if uint16(v) < 0 || uint16(v) > 65535 {
-			panic("port error!")
-		}
-		needRecordPort = append(needRecordPort, uint16(v))
-	}
+	//for _, port := range localIPList {
+	//	v, err := strconv.Atoi(port)
+	//	if err != nil {
+	//		panic("port error!")
+	//	}
+	//	if uint16(v) < 0 || uint16(v) > 65535 {
+	//		panic("port error!")
+	//	}
+	//	needRecordPort = append(needRecordPort, uint16(v))
+	//}
 
-	if len(needRecordPort) == 0 {
-		log.Fatal("Port num == 0, error!")
-	}
+	//if len(needRecordPort) == 0 {
+	//	log.Fatal("Port num == 0, error!")
+	//}
 
-	if localIP == "" {
+	if len(localIPList) == 0 {
 		log.Fatal("Local IP Address is empty, error!")
 	}
 
-	log.Print("The monitoring port is: ", needRecordPort)
-	log.Print("Local IP Address is: ", localIP)
+	if len(etherList) == 0 {
+		log.Fatal("Ether Num is 0, error!")
+	}
+
+	log.Println(etherList)
+
+	// init ether traffic
+	for _, etherName := range etherList {
+		flow := getEtherTransmitBytes(etherName)
+		if flow == uint64(0) {
+			log.Fatal("ether error!", etherName)
+		} else {
+			trafficBytes[etherName] = flow
+		}
+	}
+
+	//log.Print("The monitoring port is: ", needRecordPort)
+	//log.Print("Local IP Address is: ", localIP)
+	//log.Print("Ether Name is: ", etherName)
 
 	// setup cronjob
 	cron := gocron.NewScheduler(time.UTC)
@@ -125,5 +197,5 @@ func main() {
 	cron.StartAsync()
 
 	http.Handle("/metrics", promhttp.Handler())
-	_ = http.ListenAndServe(":2112", nil)
+	_ = http.ListenAndServe("127.0.0.1:2112", nil)
 }
