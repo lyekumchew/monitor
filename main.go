@@ -22,7 +22,8 @@ func (i *multiFlag) String() string {
 	return "flags..."
 }
 
-var localIPList multiFlag
+var ipPortList multiFlag
+var ipPortListFormat [][]string
 var etherList multiFlag
 
 func (i *multiFlag) Set(value string) error {
@@ -68,9 +69,11 @@ func init() {
 		}
 	}
 
-	flag.Var(&localIPList, "ipPort", "the monitoring port.")
-	//flag.StringVar(&localIP, "ip", "", "local IP Address.")
+	// format: 127.0.0.1:4021|127.0.0.2:4000
+	flag.Var(&ipPortList, "ipPort", "the monitoring port.")
 	flag.Var(&etherList, "ether", "Ether Name.")
+
+	ipPortListFormat = [][]string{}
 }
 
 func job() {
@@ -86,25 +89,27 @@ func job() {
 		log.Fatal(err)
 	}
 
-	for _, ipPort := range localIPList {
+	for _, ipPortList := range ipPortListFormat {
 		freq := make(map[string]int)
 		port := 0
 
 		// 过滤包, 只要国内到机器的包
 		for _, f := range df {
-			ipPortSplit := strings.Split(ipPort, ":")
-			if len(ipPortSplit) != 2 {
-				log.Println("ip port split error!")
-				return
-			}
-			ip := ipPortSplit[0]
-			port, _ = strconv.Atoi(ipPortSplit[1])
-			if port == 0 {
-				log.Println("port strcov.Atoi error!")
-				return
-			}
-			if f.TupleOrig.Proto.DestinationPort == uint16(port) && f.TupleOrig.IP.DestinationAddress.String() == ip {
-				freq[f.TupleOrig.IP.SourceAddress.String()]++
+			for _, ipPort := range ipPortList {
+				ipPortSplit := strings.Split(ipPort, ":")
+				if len(ipPortSplit) != 2 {
+					log.Println("ip port split error!")
+					return
+				}
+				ip := ipPortSplit[0]
+				port, _ = strconv.Atoi(ipPortSplit[1])
+				if port == 0 {
+					log.Println("port strcov.Atoi error!")
+					return
+				}
+				if f.TupleOrig.Proto.DestinationPort == uint16(port) && f.TupleOrig.IP.DestinationAddress.String() == ip {
+					freq[f.TupleOrig.IP.SourceAddress.String()]++
+				}
 			}
 		}
 
@@ -150,22 +155,7 @@ func getEtherTransmitBytes(etherName string) uint64 {
 func main() {
 	flag.Parse()
 
-	//for _, port := range localIPList {
-	//	v, err := strconv.Atoi(port)
-	//	if err != nil {
-	//		panic("port error!")
-	//	}
-	//	if uint16(v) < 0 || uint16(v) > 65535 {
-	//		panic("port error!")
-	//	}
-	//	needRecordPort = append(needRecordPort, uint16(v))
-	//}
-
-	//if len(needRecordPort) == 0 {
-	//	log.Fatal("Port num == 0, error!")
-	//}
-
-	if len(localIPList) == 0 {
+	if len(ipPortList) == 0 {
 		log.Fatal("Local IP Address is empty, error!")
 	}
 
@@ -185,9 +175,15 @@ func main() {
 		}
 	}
 
-	//log.Print("The monitoring port is: ", needRecordPort)
-	//log.Print("Local IP Address is: ", localIP)
-	//log.Print("Ether Name is: ", etherName)
+	log.Println(ipPortList)
+
+	for _, v := range ipPortList {
+		ipPortListFormat = append(ipPortListFormat, strings.Split(v, "|"))
+	}
+
+	for k, v := range ipPortListFormat {
+		log.Println(k, "ipPortList", v)
+	}
 
 	// setup cronjob
 	cron := gocron.NewScheduler(time.UTC)
