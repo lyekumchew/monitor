@@ -9,6 +9,6 @@ func main() {
 	c, _ := conntrack.Dial(nil)
 	df, _ := c.DumpFilter(conntrack.Filter{})
 	for _, v := range df {
-		fmt.Println(v)
+		fmt.Println(v.ProtoInfo.TCP.State == 3)
 	}
 }

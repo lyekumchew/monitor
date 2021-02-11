@@ -107,7 +107,9 @@ func job() {
 					log.Println("port strcov.Atoi error!")
 					return
 				}
-				if f.TupleOrig.Proto.DestinationPort == uint16(port) && f.TupleOrig.IP.DestinationAddress.String() == ip {
+				if f.TupleOrig.Proto.DestinationPort == uint16(port) &&
+					f.TupleOrig.IP.DestinationAddress.String() == ip &&
+					(f.ProtoInfo.TCP != nil && f.ProtoInfo.TCP.State == 3) {
 					freq[f.TupleOrig.IP.SourceAddress.String()]++
 				}
 			}
